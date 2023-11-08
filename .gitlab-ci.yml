@@ -1,0 +1,319 @@
+stages:
+  - test
+  #- sonarqube
+  - build
+  - sentry
+  - deploy
+
+variables:
+  FF_GITLAB_REGISTRY_HELPER_IMAGE: 1
+
+#include:
+##all-code-sast
+#  #- local.remote: https://git.edenfarm.id/anakbawang/ci-template/raw/master/analyzer-code/analyzer.yml
+#  - template: SAST.gitlab-ci.yml
+##code_quality
+#  #- local.remote: https://git.edenfarm.id/anakbawang/ci-template/raw/master/quality-code/quality.yml
+#  - template: Code-Quality.gitlab-ci.yml
+#  #- url: https://git.edenfarm.id/anakbawang/dockerfile/-/raw/master/api-sales/Dockerfile
+
+#code_quality:
+#  stage: test
+#  artifacts:
+#    paths: [gl-code-quality-report.json]
+
+#sast:
+#  stage: test
+#  variables:
+#    BUILD_REPO_PATH: ./public
+#    COMPILE: "false"
+#  artifacts:
+#    reports:
+#      sast: gl-sast-report.json
+
+#coverage:
+#  image: $CI_REGISTRY/image/node-build-14.19.x/master:latest
+#  stage: test
+#  before_script:
+#    - git config --global url."https://$GITLAB_CI_ACCESS:$GITLAB_CI_TOKEN@git.edenfarm.id/".insteadOf "https://git.edenfarm.id/"
+#    - git clone --single-branch --branch $CI_COMMIT_BRANCH $CI_REPOSITORY_URL /go/src/git.edenfarm.id/project-version2/dashboard
+#    - cd /go/src/git.edenfarm.id/project-version2/dashboard
+#    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+#    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+#    - aws configure set default.region $AWS_DEFAULT_REGION
+#    - aws configure set output json
+#    - aws s3 cp s3://$S3_BUCKET_NAME/base_env/dashboard/$CI_COMMIT_BRANCH/.env ./
+#    - npm cache clean --force
+#    - npm install --force
+#    - npm i @vue/cli@5.0.5 --force
+#  script:
+#    - npm run test:unit
+#  artifacts:
+#    expire_in: 1 week
+#    paths:
+#    - coverage/clover.xml
+#  allow_failure: true
+#  only:
+#   - rnd
+
+#Sonar Scanner:
+#  image: $CI_REGISTRY/image/sonar-scanner-cli/master
+#  stage: sonarqube
+#  script:
+#    - sonar-scanner
+#      -Dsonar.host.url=$SONARQUBE_URL
+#      -Dsonar.projectKey=$SONARQUBE_PROJECT_KEY
+#      -Dsonar.login=$SONARQUBE_TOKEN
+#      -Dsonar.projectName=Project-$CI_PROJECT_NAME
+#      -Dsonar.sources=./
+#      -Dsonar.testExecutionReportPaths=coverage/clover.xml
+#      -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+#  allow_failure: true
+#  only:
+#    - rnd
+
+#Sonar Scan:
+#  stage: test
+#  image:
+#    name: gcr.io/kaniko-project/executor:debug
+#    entrypoint: [""]
+#  script:
+#    - mkdir -p /kaniko/.docker
+#    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "gitlab-ci-token" "${CI_JOB_TOKEN}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+#    - >-
+#      /kaniko/executor
+#      --build-arg AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+#      --build-arg AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+#      --build-arg GITLAB_CI_ACCESS=${GITLAB_CI_ACCESS}
+#      --build-arg GITLAB_CI_TOKEN=${GITLAB_CI_TOKEN}
+#      --build-arg S3_BUCKET_NAME=${S3_BUCKET_NAME}
+#      --build-arg AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+#      --build-arg CI_COMMIT_BRANCH=${CI_COMMIT_BRANCH}
+#      --build-arg CI_REGISTRY=${CI_REGISTRY}
+#      --build-arg CI_PROJECT_URL=${CI_PROJECT_URL}
+#      --build-arg CI_REPOSITORY_URL=${CI_REPOSITORY_URL}
+#      --build-arg CI_REGISTRY=${CI_REGISTRY}
+#      --build-arg SONARQUBE_PROJECT_KEY=${SONARQUBE_PROJECT_KEY}
+#      --build-arg SONARQUBE_URL=${SONARQUBE_URL}
+#      --build-arg SONARQUBE_TOKEN=${SONARQUBE_TOKEN}
+#      --build-arg CI_PROJECT_NAME=${CI_PROJECT_NAME}
+#      --dockerfile docker/sonar.dockerfile
+#      --no-push
+#      --cache=false
+#  only:
+#    - staging
+
+Build Revamp:
+  image: $CI_REGISTRY/image/node14/master:latest
+  stage: build
+  script:
+    - npm install --progress=false
+    - aws s3 cp s3://$S3_BUCKET_NAME/$REVAMP_ENV_FILE/.env ./
+    - npm i @vue/cli
+    - npm run build -- --mode development
+    - aws s3 rm s3://$S3_BUCKET_NAME/$REVAMP_BUCKET_PATH/ --recursive
+    - aws s3 sync dist s3://$S3_BUCKET_NAME/$REVAMP_BUCKET_PATH/ --no-progress
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist
+  only:
+    - revamp
+
+Deploy Revamp:
+  image: $CI_REGISTRY50/image/ubuntu/master
+  stage: deploy
+  script:
+    - sshpass -p $PRIVATE_KEY ssh -p $PORT -o StrictHostKeyChecking=no $USER_SERVER@$DEPLOY_SERVER "sh $DEPLOY_REVAMP"
+  only:
+    - revamp
+  tags:
+    - deploy_to_dev
+
+Build Image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "gitlab-ci-token" "${CI_JOB_TOKEN}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --build-arg AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      --build-arg AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      --build-arg GITLAB_CI_ACCESS=${GITLAB_CI_ACCESS}
+      --build-arg GITLAB_CI_TOKEN=${GITLAB_CI_TOKEN}
+      --build-arg S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      --build-arg AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      --build-arg CI_COMMIT_BRANCH=${CI_COMMIT_BRANCH}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --build-arg CI_PROJECT_URL=${CI_PROJECT_URL}
+      --build-arg CI_REPOSITORY_URL=${CI_REPOSITORY_URL}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --cache=false
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile docker/Dockerfile
+      --destination $CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHORT_SHA
+  only:
+    - rnd
+    - archive
+    - dev
+    - staging
+
+image_gen2:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "gitlab-ci-token" "${CI_JOB_TOKEN}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --build-arg AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      --build-arg AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      --build-arg GITLAB_CI_ACCESS=${GITLAB_CI_ACCESS}
+      --build-arg GITLAB_CI_TOKEN=${GITLAB_CI_TOKEN}
+      --build-arg S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      --build-arg AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      --build-arg CI_COMMIT_BRANCH=${CI_COMMIT_BRANCH}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --build-arg CI_PROJECT_URL=${CI_PROJECT_URL}
+      --build-arg CI_REPOSITORY_URL=${CI_REPOSITORY_URL}
+      --build-arg CI_REGISTRY=${CI_REGISTRY}
+      --build-arg BASE_ENV=${BASE_ENV}
+      --cache=false
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile docker/gen2.dockerfile
+      --destination $CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHORT_SHA
+  only:
+    - master
+
+Deploy RnD:
+  stage: deploy
+  image: git.edenfarm.id:5050/image/helm-edenfarm/master:latest
+  before_script:
+    - |
+      cat > apps.sh <<EOF
+      curl --header "Content-Type: application/json" --request POST --data '{"body":"Commit-<CI_COMMIT_SHORT_SHA>","title":"<NOTIF>","url":"https://rnd.dashboard.edenfarm.tech/","type":"pushprod"}' $DEV_API_NOTIF
+      EOF
+    - aws eks --region $AWS_DEFAULT_REGION update-kubeconfig --name $AWS_DEV_CLUSTER_NAME
+  script:
+    - sed -i "s/<VERSION>/${CI_COMMIT_SHORT_SHA}/g" kubernetes/deploy_rnd.yaml
+    - kubectl apply -f kubernetes/deploy_rnd.yaml
+  after_script:
+    - sed -i "s/<CI_COMMIT_SHORT_SHA>/${CI_COMMIT_SHORT_SHA}/g" apps.sh
+    - sh apps.sh
+  only:
+    - rnd
+  tags:
+    - deploy_to_dev
+
+Deploy Dev:
+  stage: deploy
+  image: $CI_REGISTRY/image/helm-edenfarm/master:latest
+  before_script:
+    - |
+      cat > apps.sh <<EOF
+      curl --header "Content-Type: application/json" --request POST --data '{"body":"Commit-<CI_COMMIT_SHORT_SHA>","title":"<NOTIF>","url":"https://v2.dashboard.edenfarm.tech/","type":"pushprod"}' $DEV_API_NOTIF
+      EOF
+    - aws eks --region $AWS_DEFAULT_REGION update-kubeconfig --name $AWS_DEV_CLUSTER_NAME
+  script:
+    - sed -i "s/<VERSION>/${CI_COMMIT_SHORT_SHA}/g" kubernetes/deploy_dev.yaml
+    - kubectl apply -f kubernetes/deploy_dev.yaml
+  after_script:
+    - sed -i "s/<CI_COMMIT_SHORT_SHA>/${CI_COMMIT_SHORT_SHA}/g" apps.sh
+    - sh apps.sh
+  only:
+    - dev
+  tags:
+    - deploy_to_dev
+
+Deploy Staging:
+  stage: deploy
+  image: $CI_REGISTRY/image/helm-edenfarm/master:latest
+  before_script:
+    - |
+      cat > apps.sh <<EOF
+      curl --header "Content-Type: application/json" --request POST --data '{"body":"Commit-<CI_COMMIT_SHORT_SHA>","title":"<NOTIF>","url":"https://dashboard.edenfarm.tech/","type":"pushprod"}' $STAGING_API_NOTIF
+      EOF
+    - aws eks --region $AWS_DEFAULT_REGION update-kubeconfig --name $AWS_CLUSTER_NAME_STAGING
+  script:
+    - sed -i "s/<VERSION>/${CI_COMMIT_SHORT_SHA}/g" kubernetes/deploy_staging.yaml
+    - kubectl apply -f kubernetes/deploy_staging.yaml
+  after_script:
+    - sed -i "s/<CI_COMMIT_SHORT_SHA>/${CI_COMMIT_SHORT_SHA}/g" apps.sh
+    - sh apps.sh
+  only:
+    - staging
+  tags:
+    - deploy_to_staging
+
+#Build Production:
+#  image: $CI_REGISTRY/image/node14/master:latest
+#  stage: build
+#  script:
+#    - npm install --progress=false
+#    - aws s3 cp s3://$S3_BUCKET_NAME/$PRODUCTION_ENV_FILE/.env ./
+#    - npm i @vue/cli
+#    - npm run build
+#  artifacts:
+#    expire_in: 1 week
+#    paths:
+#      - dist
+#  only:
+#    - master
+
+Build Tag:
+  image: $CI_REGISTRY/image/node14/master:latest
+  stage: build
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - aws s3 cp s3://$S3_BUCKET_NAME/$PRODUCTION_ENV_FILE/.env ./
+    - sed -i "s/<VERSION>/${CI_COMMIT_TAG}/g" .env
+    - npm install --progress=false
+    - npm i @vue/cli
+    - npm install -g @sentry/cli --unsafe-perm
+    - npm run build
+    - export PKG_NAME=$(node -p "require('${CI_PROJECT_DIR}/package.json').name")
+    - export SENTRY_RELEASE_VERSION="${PKG_NAME}@${CI_COMMIT_TAG}"
+    - export SENTRY_AUTH_TOKEN=$SENTRY_GIT_AUTH_TOKEN
+    - export SENTRY_ORG=$SENTRY_GIT_ORG
+    - export SENTRY_PROJECT=$SENTRY_GIT_PROJECT
+    - echo "Create a new release $SENTRY_RELEASE_VERSION"
+    - sentry-cli releases new $SENTRY_RELEASE_VERSION
+    - sentry-cli releases set-commits --auto $SENTRY_RELEASE_VERSION
+    - sentry-cli releases files $SENTRY_RELEASE_VERSION upload-sourcemaps $CI_PROJECT_DIR/dist
+    - sentry-cli releases finalize $SENTRY_RELEASE_VERSION
+    - echo "Finalized release for $SENTRY_RELEASE_VERSION"
+    - aws s3 rm s3://$S3_BUCKET_NAME/$PRODUCTION_BUCKET_PATH/ --recursive
+    - aws s3 sync dist s3://$S3_BUCKET_NAME/$PRODUCTION_BUCKET_PATH/ --no-progress
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist
+
+#manual Deploy only master/production
+Deploy Tag:
+  image: $CI_REGISTRY/image/ubuntu/master
+  stage: deploy
+  script:
+    - sshpass -p $PRIVATE_KEY ssh -p $PORT -o StrictHostKeyChecking=no $USER_SERVER@$DEPLOY_SERVER "sh $DEPLOY_PRODUCTION"
+  after_script:
+    - |
+      cat > apps.sh <<EOF
+      curl --header "Content-Type: application/json" --request POST --data '{"body":"<TAG>","title":"<PROD_TITLE_NOTIF>","url":"https://dashboard.edenfarm.id/","type":"pushprod"}' $PROD_API_NOTIF
+      EOF
+    - sed -i "s/<TAG>/${CI_COMMIT_TAG}/g" apps.sh
+    - sed -i "s/<PROD_TITLE_NOTIF>/${PROD_TITLE_NOTIF}/g" apps.sh
+    - sh apps.sh
+  allow_failure: true
+  only:
+    - tags
+  except:
+    - master
+  when: manual
+  tags:
+    - deploy_to_production
